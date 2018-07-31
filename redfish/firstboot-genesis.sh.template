@@ -1,0 +1,68 @@
+#!/bin/bash
+#
+# Copyright 2018 AT&T Intellectual Property.  All other rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Add proxy settings if required for your environment
+#
+#export http_proxy=http://your.proxy.com:8080/
+#export https_proxy=http://your.proxy.com:8080/
+
+HOSTNAME=$(hostname -s)
+echo "### BEGINING FIRSTBOOT SCRIPT ###" "[`date`]"
+echo " "
+echo "### BUILDING SERVER [$HOSTNAME]"
+echo " "
+
+echo "Updating available packages"
+apt-get update 
+
+echo "Adding IP Tables Rules"
+echo 1 > /proc/sys/net/ipv4/ip_forward 
+iptables -t nat -A POSTROUTING -o bond0.41 -j MASQUERADE 
+iptables -A FORWARD -i bond0.41 -o eno3 -m state --state RELATED,ESTABLISHED -j ACCEPT 
+iptables -A FORWARD -i eno3 -o bond0.41 -j ACCEPT
+
+echo "Creating Ceph journal partition and filesystem"
+# create ceph journal partition and filesystem
+
+devices=sdh
+size=320
+
+echo "creating partions for ceph journal:"
+echo $devices
+
+for d in $devices
+do
+   parted -s /dev/${d} mklabel msdos
+   parted -s /dev/${d} -- mkpart primary ext4 1 ${size}
+done
+partprobe
+sleep 5 #let udev settle down
+
+devnum=1
+for d in $devices
+do
+   mountpoint=/var/lib/openstack-helm/ceph/journal/ceph${devnum}
+   mkfs -t ext4  /dev/${d}${devnum}
+   UUID=$(blkid -o export /dev/${d}${devnum} | sed -ne /^UUID/s/UUID=//p)
+   mkdir -p ${mountpoint}
+   echo "UUID=$UUID ${mountpoint} ext4 defaults,nofail 0 0" >>/etc/fstab
+   devnum=$((devnum+1))
+done
+
+/bin/mount -a
+
+exit
+
